@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Günlük İş Döngüsü</title>
+<style>
+  :root{
+    --bg:#0f1724; --card:#0b1220; --accent:#60a5fa; --muted:#9aa8bf; --text:#e6eef8;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; font-family:Inter,system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial;
+    background:linear-gradient(180deg,#071026 0%, #071827 100%); color:var(--text); min-height:100vh;
+    display:flex; align-items:center; justify-content:center; padding:24px;
+  }
+  .container{width:100%; max-width:920px;}
+  header{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px}
+  h1{margin:0;font-size:20px}
+  .card{background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));
+        border:1px solid rgba(255,255,255,0.03); padding:18px; border-radius:12px; box-shadow: 0 6px 18px rgba(2,6,23,0.6);}
+  .top{display:flex; gap:16px; flex-wrap:wrap; margin-bottom:14px}
+  .form-row{display:flex; gap:8px; flex:1; min-width:220px}
+  label{display:block;font-size:13px;color:var(--muted); margin-bottom:6px}
+  input[type="text"], input[type="date"]{
+    width:100%; padding:10px 12px; border-radius:8px; border:1px solid rgba(255,255,255,0.03);
+    background:transparent; color:var(--text); font-size:15px;
+  }
+  .button{padding:10px 14px;border-radius:10px;border:none;background:var(--accent);color:#052036;cursor:pointer;font-weight:600}
+  .big-card{display:flex;align-items:center;justify-content:space-between;padding:22px;border-radius:12px;margin-bottom:12px}
+  .task-name{font-size:22px;font-weight:700}
+  .muted{color:var(--muted); font-size:13px}
+  ul{padding-left:18px;margin:0}
+  .week-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:10px}
+  .day-item{background:rgba(255,255,255,0.02); padding:12px;border-radius:10px; border:1px solid rgba(255,255,255,0.02)}
+  footer{margin-top:14px; display:flex; gap:8px; align-items:center; justify-content:flex-end}
+  .small{font-size:13px;color:var(--muted)}
+  @media(max-width:640px){
+    .top{flex-direction:column}
+    header{flex-direction:column; align-items:flex-start; gap:8px}
+  }
+</style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Günlük İş Döngüsü</h1>
+      <div class="small">İş A ↔ İş B dönüşümü | Veriler tarayıcıda saklanır</div>
+    </header>
+
+    <div class="card">
+      <div class="top">
+        <div style="flex:1; min-width:220px">
+          <label>İş A</label>
+          <input id="jobA" type="text" placeholder="Örn: Temizlik" />
+        </div>
+
+        <div style="flex:1; min-width:220px">
+          <label>İş B</label>
+          <input id="jobB" type="text" placeholder="Örn: Rapor Yazma" />
+        </div>
+
+        <div style="width:220px">
+          <label>Referans tarih (o gün İş A yapıldı)</label>
+          <input id="refDate" type="date" />
+        </div>
+
+        <div style="display:flex; align-items:end;">
+          <button id="saveBtn" class="button">Kaydet</button>
+        </div>
+      </div>
+
+      <div id="todayCard" class="card big-card" style="margin-bottom:12px;">
+        <div>
+          <div class="muted">Bugün</div>
+          <div id="todayTask" class="task-name">—</div>
+          <div id="todayDate" class="small" style="margin-top:6px;color:var(--muted)"></div>
+        </div>
+        <div>
+          <button id="notifyBtn" class="button" style="margin-left:12px;">Bildirim İste</button>
+          <div id="notifyStatus" class="small" style="text-align:right;margin-top:8px"></div>
+        </div>
+      </div>
+
+      <div style="margin-bottom:10px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+          <div class="muted">Önümüzdeki 7 gün</div>
+          <div class="small" id="refInfo"></div>
+        </div>
+        <div class="week-list" id="weekList"></div>
+      </div>
+
+      <footer>
+        <div class="small">Kayıt: tarayıcı localStorage</div>
+      </footer>
+    </div>
+  </div>
+
+<script>
+/*
+  Mantık:
+  - Kullanıcı bir referans tarih belirler: o gün "İş A" yapıldı kabul edilir.
+  - Gün farkı = (bugün - referans) // 1 gün
+  - Eğer fark % 2 == 0 -> İş A, değilse İş B.
+  - A ve B isimleri localStorage'da saklanır.
+*/
+
+const el = id => document.getElementById(id);
+
+const STORAGE_KEY = 'daily-job-cycle-v1';
+
+function saveState(state){
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+}
+
+function loadState(){
+  const raw = localStorage.getItem(STORAGE_KEY);
+  if(!raw) return null;
+  try { return JSON.parse(raw); } catch(e){ return null; }
+}
+
+function startOfDayUTC(date){
+  // normalize a Date to UTC midnight to compute full-day differences reliably
+  const d = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  return d;
+}
+
+function daysBetween(a, b){
+  // a and b are Date objects; returns integer number of days (b - a)
+  const msPerDay = 24*60*60*1000;
+  const ad = startOfDayUTC(a).getTime();
+  const bd = startOfDayUTC(b).getTime();
+  return Math.round((bd - ad) / msPerDay);
+}
+
+function getTaskForDate(jobA, jobB, refDateStr, dateObj){
+  let ref = refDateStr ? new Date(refDateStr) : null;
+  if(!ref || isNaN(ref.getTime())){
+    // default: use today as reference so today = İş A
+    ref = new Date();
+  }
+  const diff = daysBetween(ref, dateObj);
+  const isA = (diff % 2 === 0);
+  return isA ? jobA : jobB;
+}
+
+function render(){
+  const state = loadState() || {};
+  const jobA = state.jobA || 'İş A';
+  const jobB = state.jobB || 'İş B';
+  const refDate = state.refDate || null;
+
+  el('jobA').value = jobA;
+  el('jobB').value = jobB;
+  el('refDate').value = refDate || '';
+
+  const today = new Date();
+  const todayTask = getTaskForDate(jobA, jobB, refDate, today);
+  el('todayTask').innerText = todayTask;
+  el('todayDate').innerText = today.toLocaleDateString();
+
+  el('refInfo').innerText = refDate ? `Referans: ${new Date(refDate).toLocaleDateString()}` : 'Referans: (yok, bugün İş A kabul edilir)';
+
+  // Haftalık liste (bugün + 6 gün)
+  const weekList = el('weekList');
+  weekList.innerHTML = '';
+  for(let i=0;i<7;i++){
+    const d = new Date();
+    d.setDate(d.getDate() + i);
+    const task = getTaskForDate(jobA, jobB, refDate, d);
+    const item = document.createElement('div');
+    item.className = 'day-item';
+    item.innerHTML = `<div style="font-weight:700">${d.toLocaleDateString(undefined, {weekday:'short', day:'2-digit', month:'short'})}</div>
+                      <div style="margin-top:6px;color:var(--muted)">${task}</div>`;
+    weekList.appendChild(item);
+  }
+}
+
+// Kaydet butonu
+el('saveBtn').addEventListener('click', ()=>{
+  const jobA = el('jobA').value.trim() || 'İş A';
+  const jobB = el('jobB').value.trim() || 'İş B';
+  const refDate = el('refDate').value || null;
+  saveState({jobA, jobB, refDate});
+  render();
+  alert('Kaydedildi ✅');
+});
+
+// Bildirim desteği
+async function requestNotification(){
+  if(!('Notification' in window)){
+    el('notifyStatus').innerText = 'Tarayıcı bildirimleri desteklemiyor.';
+    return;
+  }
+  if(Notification.permission === 'granted'){
+    el('notifyStatus').innerText = 'Bildirim izni zaten verildi.';
+    showTodayNotification();
+    return;
+  }
+  if(Notification.permission === 'denied'){
+    el('notifyStatus').innerText = 'Bildirim izni engellendi. Tarayıcı ayarlarından aç.';
+    return;
+  }
+  try{
+    const perm = await Notification.requestPermission();
+    el('notifyStatus').innerText = `İzin: ${perm}`;
+    if(perm === 'granted') showTodayNotification();
+  }catch(e){
+    el('notifyStatus').innerText = 'İzin istenirken hata';
+  }
+}
+
+function showTodayNotification(){
+  const state = loadState() || {};
+  const jobA = state.jobA || 'İş A';
+  const jobB = state.jobB || 'İş B';
+  const refDate = state.refDate || null;
+  const today = new Date();
+  const task = getTaskForDate(jobA, jobB, refDate, today);
+  const n = new Notification('Bugün yapılacak iş', {
+    body: task,
+    tag: 'daily-job-task'
+  });
+  // istersen tıklama davranışı eklenebilir
+  n.onclick = () => window.focus();
+}
+
+// notify buton
+el('notifyBtn').addEventListener('click', requestNotification);
+
+// Init: yükle state ya da örnek değer
+(function init(){
+  const saved = loadState();
+  if(!saved){
+    // örnek başlangıç
+    const todayStr = new Date().toISOString().slice(0,10);
+    saveState({jobA: 'İş A', jobB: 'İş B', refDate: todayStr});
+  }
+  render();
+})();
+</script>
+</body>
+</html>
